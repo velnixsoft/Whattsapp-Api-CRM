@@ -5,11 +5,11 @@
 -- ==============================================================================
 
 -- 1. Create and Select Database
-CREATE DATABASE IF NOT EXISTS `wacrm`
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
+-- CREATE DATABASE IF NOT EXISTS `wacrm`
+--   CHARACTER SET utf8mb4
+--   COLLATE utf8mb4_unicode_ci;
 
-USE `wacrm`;
+-- USE `wacrm`;
 
 -- Disable foreign key checks for clean setup
 SET FOREIGN_KEY_CHECKS = 0;
