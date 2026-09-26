@@ -38,7 +38,8 @@ export async function query<T = mysql.RowDataPacket>(
 ): Promise<T[]> {
   const pool = getMySQLPool();
   if (params && Array.isArray(params) && params.length > 0) {
-    const [rows] = await pool.query(sql, params as (string | number | boolean | null)[]);
+    const cleanParams = params.map((v) => (v === undefined ? null : v));
+    const [rows] = await pool.query(sql, cleanParams as (string | number | boolean | null)[]);
     return rows as T[];
   }
   const [rows] = await pool.query(sql);
@@ -54,7 +55,8 @@ export async function execute(
 ): Promise<mysql.ResultSetHeader> {
   const pool = getMySQLPool();
   if (params && Array.isArray(params) && params.length > 0) {
-    const [result] = await pool.execute(sql, params as (string | number | boolean | null)[]);
+    const cleanParams = params.map((v) => (v === undefined ? null : v));
+    const [result] = await pool.execute(sql, cleanParams as (string | number | boolean | null)[]);
     return result as mysql.ResultSetHeader;
   }
   const [result] = await pool.execute(sql);

@@ -664,7 +664,7 @@ DROP TABLE IF EXISTS `member_presence`;
 CREATE TABLE `member_presence` (
   `user_id` VARCHAR(36) NOT NULL,
   `account_id` VARCHAR(36) NOT NULL,
-  `status` ENUM('online', 'busy', 'offline') NOT NULL DEFAULT 'offline',
+  `status` VARCHAR(32) NOT NULL DEFAULT 'online',
   `last_seen_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`user_id`, `account_id`),
   CONSTRAINT `fk_presence_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,

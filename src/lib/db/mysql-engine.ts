@@ -1,4 +1,5 @@
 import { query, execute, generateUUID, getMySQLPool } from "@/lib/db/mysql";
+import { getSessionUser } from "@/lib/auth/mysql-auth";
 
 export interface FilterCondition {
   column: string;
@@ -545,19 +546,26 @@ export async function executeMySQLRPC<T = unknown>(
       case "increment_automation_counter":
       case "increment_automation_execution_count": {
         const autoId = (params.p_automation_id || params.automation_id || params.id) as string;
-        await execute("CALL increment_automation_counter(?);", [autoId]);
+        if (autoId) {
+          await execute("CALL increment_automation_counter(?);", [autoId]);
+        }
         return { data: (null as unknown) as T, error: null };
       }
       case "increment_flow_counter":
       case "increment_flow_execution_count": {
         const flowId = (params.p_flow_id || params.flow_id || params.id) as string;
-        await execute("CALL increment_flow_counter(?);", [flowId]);
+        if (flowId) {
+          await execute("CALL increment_flow_counter(?);", [flowId]);
+        }
         return { data: (null as unknown) as T, error: null };
       }
       case "filter_contacts_by_tags": {
-        const accountId = params.p_account_id as string;
-        const tagIds = Array.isArray(params.p_tag_ids) ? JSON.stringify(params.p_tag_ids) : (params.p_tag_ids as string);
+        const accountId = (params.p_account_id || params.account_id) as string;
+        const tagIds = Array.isArray(params.p_tag_ids) ? JSON.stringify(params.p_tag_ids) : ((params.p_tag_ids || "[]") as string);
         const matchAll = Boolean(params.p_match_all);
+        if (!accountId) {
+          return { data: ([] as unknown) as T, error: null };
+        }
         const rows = await query<Record<string, unknown>>("CALL filter_contacts_by_tags(?, ?, ?);", [
           accountId,
           tagIds,
@@ -566,28 +574,75 @@ export async function executeMySQLRPC<T = unknown>(
         return { data: (rows as unknown) as T, error: null };
       }
       case "touch_presence": {
-        const userId = params.p_user_id as string;
-        const accountId = params.p_account_id as string;
-        const status = (params.p_status || "online") as string;
-        const id = generateUUID();
+        let userId = (params.p_user_id || params.user_id) as string | undefined;
+        let accountId = (params.p_account_id || params.account_id) as string | undefined;
+        let status = (params.p_status || params.status || "online") as string;
+
+        if (status !== "online" && status !== "away") {
+          status = "online";
+        }
+
+        if (!userId) {
+          try {
+            const sessionUser = await getSessionUser();
+            if (sessionUser?.id) {
+              userId = sessionUser.id;
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (!userId) {
+          return { data: null, error: { message: "Unauthorized" } };
+        }
+
+        if (!accountId) {
+          const profileRows = await query<{ account_id: string }>(
+            "SELECT account_id FROM profiles WHERE user_id = ? LIMIT 1;",
+            [userId]
+          );
+          if (profileRows && profileRows.length > 0 && profileRows[0].account_id) {
+            accountId = profileRows[0].account_id;
+          }
+        }
+
+        if (!accountId) {
+          return { data: null, error: { message: "No account for caller" } };
+        }
+
         await execute(
-          `INSERT INTO member_presence (id, user_id, account_id, status, last_seen_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))
-           ON DUPLICATE KEY UPDATE status = VALUES(status), last_seen_at = CURRENT_TIMESTAMP(3), updated_at = CURRENT_TIMESTAMP(3);`,
-          [id, userId, accountId, status]
+          `INSERT INTO member_presence (user_id, account_id, status, last_seen_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP(3))
+           ON DUPLICATE KEY UPDATE status = VALUES(status), last_seen_at = CURRENT_TIMESTAMP(3), account_id = VALUES(account_id);`,
+          [userId, accountId, status]
         );
         return { data: (null as unknown) as T, error: null };
       }
       case "claim_account_invitation":
       case "redeem_invitation": {
         const tokenHash = (params.p_token_hash || params.token_hash) as string;
-        const userId = (params.p_user_id || params.user_id) as string;
+        let userId = (params.p_user_id || params.user_id) as string;
+        if (!userId) {
+          try {
+            const sessionUser = await getSessionUser();
+            if (sessionUser?.id) userId = sessionUser.id;
+          } catch {
+            // ignore
+          }
+        }
+        if (!tokenHash || !userId) {
+          return { data: null, error: { message: "Missing token_hash or user_id" } };
+        }
         await execute("CALL claim_account_invitation(?, ?);", [tokenHash, userId]);
         const invites = await query<{ account_id: string }>("SELECT account_id FROM account_invitations WHERE token_hash = ? LIMIT 1;", [tokenHash]);
         return { data: (invites[0]?.account_id || null) as unknown as T, error: null };
       }
       case "peek_invitation": {
         const tokenHash = (params.p_token_hash || params.token_hash) as string;
+        if (!tokenHash) {
+          return { data: null, error: null };
+        }
         const rows = await query<{ account_name: string; role: string; email: string }>(
           `SELECT a.name AS account_name, i.role, u.email
            FROM account_invitations i
@@ -600,24 +655,41 @@ export async function executeMySQLRPC<T = unknown>(
         return { data: (rows[0] || null) as unknown as T, error: null };
       }
       case "transfer_account_ownership": {
-        const accountId = params.p_account_id as string;
-        const newOwnerUserId = params.p_new_owner_user_id as string;
-        const currentUserId = params.p_current_user_id as string;
+        const accountId = (params.p_account_id || params.account_id) as string;
+        const newOwnerUserId = (params.p_new_owner_user_id || params.new_owner_user_id) as string;
+        let currentUserId = (params.p_current_user_id || params.current_user_id) as string;
+        if (!currentUserId) {
+          try {
+            const sessionUser = await getSessionUser();
+            if (sessionUser?.id) currentUserId = sessionUser.id;
+          } catch {
+            // ignore
+          }
+        }
+        if (!accountId || !newOwnerUserId || !currentUserId) {
+          return { data: null, error: { message: "Missing required parameters" } };
+        }
         await execute("UPDATE accounts SET owner_user_id = ? WHERE id = ?;", [newOwnerUserId, accountId]);
         await execute("UPDATE profiles SET account_role = 'admin' WHERE user_id = ? AND account_id = ?;", [currentUserId, accountId]);
         await execute("UPDATE profiles SET account_role = 'owner' WHERE user_id = ? AND account_id = ?;", [newOwnerUserId, accountId]);
         return { data: (null as unknown) as T, error: null };
       }
       case "set_member_role": {
-        const targetUserId = params.p_target_user_id as string;
-        const accountId = params.p_account_id as string;
-        const role = params.p_new_role as string;
+        const targetUserId = (params.p_target_user_id || params.target_user_id) as string;
+        const accountId = (params.p_account_id || params.account_id) as string;
+        const role = (params.p_new_role || params.role || params.new_role) as string;
+        if (!targetUserId || !accountId || !role) {
+          return { data: null, error: { message: "Missing required parameters" } };
+        }
         await execute("UPDATE profiles SET account_role = ? WHERE user_id = ? AND account_id = ?;", [role, targetUserId, accountId]);
         return { data: (null as unknown) as T, error: null };
       }
       case "remove_account_member": {
-        const targetUserId = params.p_target_user_id as string;
-        const accountId = params.p_account_id as string;
+        const targetUserId = (params.p_target_user_id || params.target_user_id) as string;
+        const accountId = (params.p_account_id || params.account_id) as string;
+        if (!targetUserId || !accountId) {
+          return { data: null, error: { message: "Missing required parameters" } };
+        }
         await execute("UPDATE profiles SET account_id = NULL, account_role = NULL WHERE user_id = ? AND account_id = ?;", [targetUserId, accountId]);
         return { data: (null as unknown) as T, error: null };
       }
@@ -625,7 +697,7 @@ export async function executeMySQLRPC<T = unknown>(
         return { data: (null as unknown) as T, error: null };
       }
       default: {
-        const paramVals = Object.values(params);
+        const paramVals = Object.values(params).map((v) => (v === undefined ? null : v));
         const placeholders = paramVals.map(() => "?").join(", ");
         const rows = await query(`CALL \`${name.replace(/`/g, "")}\`(${placeholders});`, paramVals);
         return { data: (rows as unknown) as T, error: null };
